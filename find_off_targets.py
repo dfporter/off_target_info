@@ -209,7 +209,7 @@ if __name__ == '__main__':
         help='Name of the column in the input_excel file holding intended target gene names.')
     parser.add_argument('--do_not_run_cas_offinder', action='store_true',
         default=False,
-        help="Don't run cas-offinder; assume present and process it. Cas-offinder takes a long time to run.")
+        help="Don't run cas-offinder; assume its output is present. Cas-offinder takes a long time to run.")
     parser.add_argument('--overwrite_genome_bed_file', action='store_true',
         default=False,
         help="Overwrite a genome bed file if present.")
