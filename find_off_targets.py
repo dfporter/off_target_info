@@ -122,7 +122,7 @@ def identify_target_genes(
     print("Simplification of cas-offinder output:\n", hits.head())
     # Add the actual targets to the dataframe with intended targets.
     info['Targets'] = [hits.loc[x, 'Targets'] if x in overlaps.index else set() for x in info.index]
-    print("With actual targets:\n", info.tail())
+
  
     # Transfer mismatch locations to the info dataframe.
     info['mm locs'] = ''
@@ -135,6 +135,8 @@ def identify_target_genes(
             info.loc[gRNA, 'mm locs'] += f"{target}: {a}; "
 
     info.to_excel(intended_vs_actual_targets_fname)
+    
+    print("With actual targets:\n", info.tail())
     print(f"Wrote output to {intended_vs_actual_targets_fname}")
 
     return overlaps, info
@@ -162,7 +164,22 @@ def mismatch_locations(
     print(gRNA_mapping_locations.head(2))
     # Finished processing cas_offinder_output_fname.
 
-    _df['mm locs'] = [gRNA_mapping_locations.loc[x, 'mm locs'].values[0] for x in _df['t']]
+    def get_locs(gRNA_and_loc):
+        if gRNA_and_loc not in gRNA_mapping_locations.index:
+            print(f"Couldn't find {gRNA_and_loc}...")
+            return []
+        try:
+            mm_locs = gRNA_mapping_locations.loc[gRNA_and_loc, 'mm locs']
+        except:
+            print("No 'mm locs' column in gRNA_mapping_locations file.")
+            return []
+
+        if type(mm_locs) == type([]):
+            return mm_locs
+
+        return gRNA_mapping_locations.loc[gRNA_and_loc, 'mm locs'].values[0]
+
+    _df['mm locs'] = [get_locs(x) for x in _df['t']]
 
     return _df  # It was edited in place, but for clarity.
 
@@ -185,7 +202,7 @@ def df_of_gRNA_seq_to_targets(
 
 
 if __name__ == '__main__':
-    
+
     parser = argparse.ArgumentParser(
         description='Use cas-offinder to examine which genes are targeted by gRNAs, and the locations of mismatches.',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -213,6 +230,10 @@ if __name__ == '__main__':
     parser.add_argument('--overwrite_genome_bed_file', action='store_true',
         default=False,
         help="Overwrite a genome bed file if present.")
+    parser.add_argument('--cas_offinder_path', 
+        default='cas-offinder',
+        help="Path to the cas-offinder binary executable.")
+    
     args = parser.parse_args()
 
     # File paths.
@@ -223,6 +244,7 @@ if __name__ == '__main__':
     input_excel = args.input_excel
     gRNA_seq_col_name = args.gRNA_seq_col_name
     target_gene_col_name = args.target_gene_col_name
+    cas_offinder_path = args.cas_offinder_path
 
     # Make the datafolder if necessary.
     os.makedirs(data_folder, exist_ok=True)
@@ -247,7 +269,7 @@ if __name__ == '__main__':
 
     # Running cas-offinder.
     # C denotes the use of CPUs vs GPUs. This program takes >=20 minutes.
-    cmd = f"./cas-offinder {cas_offinder_input_fname} C {cas_offinder_output_fname}"
+    cmd = f"{cas_offinder_path} {cas_offinder_input_fname} C {cas_offinder_output_fname}"
     print(cmd)
     run_cas_offinder and os.system(cmd)
 
