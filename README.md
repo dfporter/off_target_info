@@ -1,7 +1,7 @@
 # off_target_info
 Use cas-offinder to examine which genes are targeted by gRNAs, and the locations of mismatches.
 
-```bash
+```txt
 usage: find_off_targets.py [-h] [--data_folder DATA_FOLDER] [--sample SAMPLE] [--genome_gtf GENOME_GTF]
                            [--genome_fasta GENOME_FASTA] [--gRNA_seq_col_name GRNA_SEQ_COL_NAME]
                            [--target_gene_col_name TARGET_GENE_COL_NAME] [--do_not_run_cas_offinder]
@@ -31,7 +31,7 @@ optional arguments:
                         Name of the column in the input_excel file holding intended target gene names. (default:
                         Gene name)
   --do_not_run_cas_offinder
-                        Don't run cas-offinder; assume present and process it. Cas-offinder takes a long time to
+                        Don't run cas-offinder; assume its output is present. Cas-offinder takes a long time to
                         run. (default: False)
   --overwrite_genome_bed_file
                         Overwrite a genome bed file if present. (default: False)
@@ -39,7 +39,8 @@ optional arguments:
 ```
 
 
-```bash
+
 Example usage:
+```bash
 python find_off_targets.py ../Histones_pared_down.xlsx 
 ```
