@@ -1,30 +1,5 @@
-import pandas, re, collections, os, sys
+import pandas, re, collections, os, sys, argparse
 from typing import List, Mapping, Union
-
-# File paths.
-data_folder = 'data/processed/'
-sample = 'all_sources'
-genome_gtf_fname = "/opt/genomes/gencode.v29/gencode.v29.primary_assembly.annotation.gtf"
-genome_fa_fname = "/opt/genomes/gencode.v29/GRCh38.primary_assembly.genome.fa"
-input_excel = sys.argv[1]
-gRNA_seq_col_name = 'all gRNAs'
-
-print(input_excel)
-
-# Make the datafolder if necessary.
-os.makedirs(data_folder, exist_ok=True)
-
-# Settings.
-run_cas_offinder = False
-overwrite_genome_bed_file = False
-
-# Generated file paths for intermediates.
-cas_offinder_input_fname = f'{data_folder}/cas-offinder_input_{sample}.txt'
-cas_offinder_output_fname = f'{data_folder}/cas-offinder_output_{sample}.txt'
-cas_offinder_output_as_bed_fname = f'{data_folder}/cas-offinder_output_{sample}.bed'
-mRNA_bed_fname = f'{data_folder}/mRNAs.bed'
-overlaps_bed_fname = f'{data_folder}/overlaps.bed'
-intended_vs_actual_targets_fname = f'{data_folder}/intended_and_actual_targets.xlsx'
 
 
 def make_mRNA_bed_file(genome_gtf_fname: str) -> None:
@@ -121,7 +96,7 @@ def identify_target_genes(
 
     # Make a one-guide-per-line version of the input dataframe,
     # just holding the intended targets of each gRNA.
-    info = df_of_gRNA_seq_to_targets(df, 'all gRNAs', 'Gene name')
+    info = df_of_gRNA_seq_to_targets(df, gRNA_seq_col_name, target_gene_col_name)
     info.columns = ['Intended targets']
     print("Simplification of input file of gRNAs:\n", info.head(2))
 
@@ -164,6 +139,7 @@ def identify_target_genes(
 
     return overlaps, info
 
+
 def mismatch_locations(
     _df: pandas.DataFrame,
     cas_offinder_output_fname: str,) -> pandas.DataFrame:
@@ -190,6 +166,7 @@ def mismatch_locations(
 
     return _df  # It was edited in place, but for clarity.
 
+
 def df_of_gRNA_seq_to_targets(
     _df: pandas.DataFrame, gRNA_seq_col, target_col) -> pandas.DataFrame:
 
@@ -207,24 +184,81 @@ def df_of_gRNA_seq_to_targets(
     return df
 
 
-df = pandas.read_excel(input_excel)
-df = df.loc[[type(n)==type('') for n in df[gRNA_seq_col_name]]]
-write_input_to_offinder(genome_fa_fname, df[gRNA_seq_col_name])
+if __name__ == '__main__':
+    
+    parser = argparse.ArgumentParser(
+        description='Use cas-offinder to examine which genes are targeted by gRNAs, and the locations of mismatches.',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('input_excel', type=str, metavar='input_excel',
+        help='Excel file with gRNAs to evaluate.')
+    parser.add_argument('--data_folder', type=str,
+        default='data/processed/', help='Folder to hold outputs.')
+    parser.add_argument('--sample', type=str,
+        default='all_sources', help='Sample name for suffixing output file names.')
+    parser.add_argument('--genome_gtf', type=str,
+        default='/opt/genomes/gencode.v29/gencode.v29.primary_assembly.annotation.gtf', 
+        help='Genomic gtf.')
+    parser.add_argument('--genome_fasta', type=str,
+        default="/opt/genomes/gencode.v29/GRCh38.primary_assembly.genome.fa", 
+        help='Genomic fasta filename.')
+    parser.add_argument('--gRNA_seq_col_name', type=str,
+        default='all gRNAs',
+        help='Name of the column in the input_excel file holding guide RNAs sequences (guide RNAs separated by spaces.)')
+    parser.add_argument('--target_gene_col_name', type=str,
+        default='Gene name',
+        help='Name of the column in the input_excel file holding intended target gene names.')
+    parser.add_argument('--do_not_run_cas_offinder', action='store_true',
+        default=False,
+        help="Don't run cas-offinder; assume present and process it. Cas-offinder takes a long time to run.")
+    parser.add_argument('--overwrite_genome_bed_file', action='store_true',
+        default=False,
+        help="Overwrite a genome bed file if present.")
+    args = parser.parse_args()
 
-# Running cas-offinder.
-# C denotes the use of CPUs vs GPUs. This program takes >=20 minutes.
-cmd = f"./cas-offinder {cas_offinder_input_fname} C {cas_offinder_output_fname}"
-print(cmd)
-run_cas_offinder and os.system(cmd)
+    # File paths.
+    data_folder = args.data_folder
+    sample = args.sample
+    genome_gtf_fname = args.genome_gtf
+    genome_fa_fname = args.genome_fasta
+    input_excel = args.input_excel
+    gRNA_seq_col_name = args.gRNA_seq_col_name
+    target_gene_col_name = args.target_gene_col_name
 
-# Write the genome bed file for all mRNAs.
-if (not os.path.exists(mRNA_bed_fname)) or overwrite_genome_bed_file:
-    make_mRNA_bed_file(genome_gtf_fname)
+    # Make the datafolder if necessary.
+    os.makedirs(data_folder, exist_ok=True)
 
-intersect(
-    cas_offinder_output_fname, cas_offinder_output_as_bed_fname,
-    mRNA_bed_fname, overlaps_bed_fname)
+    # Settings.
+    run_cas_offinder = not(args.do_not_run_cas_offinder)
+    overwrite_genome_bed_file = args.overwrite_genome_bed_file
 
-identify_target_genes(
-    df, overlaps_bed_fname, intended_vs_actual_targets_fname)
+    # Generated file paths for intermediates.
+    cas_offinder_input_fname = f'{data_folder}/cas-offinder_input_{sample}.txt'
+    cas_offinder_output_fname = f'{data_folder}/cas-offinder_output_{sample}.txt'
+    cas_offinder_output_as_bed_fname = f'{data_folder}/cas-offinder_output_{sample}.bed'
+    mRNA_bed_fname = f'{data_folder}/mRNAs.bed'
+    overlaps_bed_fname = f'{data_folder}/overlaps_{sample}.bed'
+
+    # Output file.
+    intended_vs_actual_targets_fname = f'{data_folder}/intended_and_actual_targets_{sample}.xlsx'
+
+    df = pandas.read_excel(input_excel)
+    df = df.loc[[type(n)==type('') for n in df[gRNA_seq_col_name]]]
+    write_input_to_offinder(genome_fa_fname, df[gRNA_seq_col_name])
+
+    # Running cas-offinder.
+    # C denotes the use of CPUs vs GPUs. This program takes >=20 minutes.
+    cmd = f"./cas-offinder {cas_offinder_input_fname} C {cas_offinder_output_fname}"
+    print(cmd)
+    run_cas_offinder and os.system(cmd)
+
+    # Write the genome bed file for all mRNAs.
+    if (not os.path.exists(mRNA_bed_fname)) or overwrite_genome_bed_file:
+        make_mRNA_bed_file(genome_gtf_fname)
+
+    intersect(
+        cas_offinder_output_fname, cas_offinder_output_as_bed_fname,
+        mRNA_bed_fname, overlaps_bed_fname)
+
+    identify_target_genes(
+        df, overlaps_bed_fname, intended_vs_actual_targets_fname)
 
