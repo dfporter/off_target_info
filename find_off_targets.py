@@ -85,9 +85,9 @@ def intersect(
     to_cut_pos = lambda pos, strand: (pos+17 if strand == '+' else pos-6)
 
     gRNA_mapping_locations['start'] = [
-        to_cut_pos(pos, strand)-5 for pos, strand in zip(gRNA_mapping_locations['pos'], gRNA_mapping_locations['strand'])]
+        to_cut_pos(pos, strand) for pos, strand in zip(gRNA_mapping_locations['pos'], gRNA_mapping_locations['strand'])]
     gRNA_mapping_locations['end'] = [
-        to_cut_pos(pos, strand)+5 for pos, strand in zip(gRNA_mapping_locations['pos'], gRNA_mapping_locations['strand'])]
+        to_cut_pos(pos, strand)+1 for pos, strand in zip(gRNA_mapping_locations['pos'], gRNA_mapping_locations['strand'])]
 
     gRNA_mapping_locations.loc[:,['chr', 'start', 'end', 'gRNA']].to_csv(
         cas_offinder_output_as_bed_fname, header=False, index=False, sep='\t')
@@ -98,8 +98,7 @@ def intersect(
     os.system(cmd)
 
 def is_likely_target(mm_locs: List[List[int]]) -> bool:
-    print(type(mm_locs))
-    print(mm_locs)
+
     if len(mm_locs) == 0:
         return True
     any_good = False
@@ -107,16 +106,13 @@ def is_likely_target(mm_locs: List[List[int]]) -> bool:
     for locs in mm_locs:
         if any([x>17 for x in locs]):
             continue
-        if all([x<3 for x in locs]):
+        if all([x<8 for x in locs]):
             return True
-        if len([x for x in locs if x>3]) >= 3:
-            return True
-
 
     return False
 
 def identify_target_genes(
-    df: pandas.DataFrame,
+    input_excel_df: pandas.DataFrame,
     overlaps_bed_fname: str, intended_vs_actual_targets_fname: str
     ) -> List[pandas.DataFrame]:
     """Process the output of cas-offinder (genomic locations) by 
@@ -125,12 +121,17 @@ def identify_target_genes(
 
     # Make a one-guide-per-line version of the input dataframe,
     # just holding the intended targets of each gRNA.
-    info = df_of_gRNA_seq_to_targets(df, gRNA_seq_col_name, target_gene_col_name)
+    info = df_of_gRNA_seq_to_targets(input_excel_df, gRNA_seq_col_name, target_gene_col_name)
     info.columns = ['Intended targets']
     print("Simplification of input file of gRNAs:\n", info.head(2))
 
     # Load gRNA and all actual genomic hits (output 
-    # from  the bedtools intersect command).
+    # from the bedtools intersect command).
+    # Positions:
+    # cas-offinder_output_{sample}.bed -> hold cut position as start/end coordinates
+    # cas-offinder_output_{sample}.txt -> holds left border of gRNA 23 nt mapping position.
+    # overlaps_{sample}.bed -> gRNA positions are the same as the bed file (cut position).
+
     overlaps = pandas.read_csv(overlaps_bed_fname, sep='\t', header=None)
     overlaps.columns = ['gRNA chr', 'gRNA start', 'gRNA end', 'gRNA', 'gene chr', 
         'gene start', 'gene end', 'gene']
@@ -160,7 +161,6 @@ def identify_target_genes(
             mm_locs = [mm for gene, mm in zip(overlaps.loc[gRNA, 'gene'], overlaps.loc[gRNA, 'mm locs']) if gene==target]
             mm_locs = list(set(tuple(_) for _ in mm_locs))  # No duplicates.
             info.loc[gRNA, 'Good targets'] |= set([target]) if is_likely_target(mm_locs) else set()
-            print(">>likely targ? ", is_likely_target(mm_locs), ')))')
             mm_locs = re.sub('\[\[', '[', str(mm_locs))
             mm_locs = re.sub('\]\]', ']', mm_locs)
             info.loc[gRNA, 'mm locs'] += f"{target}: {mm_locs}; "
@@ -174,9 +174,13 @@ def identify_target_genes(
 
 
 def mismatch_locations(
-    _df: pandas.DataFrame,
+    overlaps: pandas.DataFrame,
     cas_offinder_output_fname: str,) -> pandas.DataFrame:
 
+    # cas-offinder_output_{sample}.txt -> holds left border of gRNA 23 nt mapping position.
+    # overlaps_{sample}.bed -> gRNA positions are the same as the bed file (cut position).
+    to_cut_pos = lambda pos, strand: (pos+17 if strand == '+' else pos-6)
+    
     # Process cas_offinder_output_fname into mapping locations:
     def interpret_mismatches(_str):
         def is_match(x):
@@ -185,6 +189,12 @@ def mismatch_locations(
 
     gRNA_mapping_locations = pandas.read_csv(cas_offinder_output_fname, sep='\t', header=None)
     gRNA_mapping_locations.columns = ['gRNA', 'chr',  'pos', 'match', 'strand', '# mismatches']
+
+    # Need to change the position to be the cut position in order to match the overlaps
+    # bed file.
+    gRNA_mapping_locations['pos'] = [
+        to_cut_pos(pos, strand) for pos, strand in zip(gRNA_mapping_locations['pos'], gRNA_mapping_locations['strand'])]
+
     gRNA_mapping_locations = gRNA_mapping_locations[gRNA_mapping_locations['# mismatches']<4]
     gRNA_mapping_locations['chr'] = [x.split(' ')[0] for x in gRNA_mapping_locations['chr']]
     gRNA_mapping_locations['mm locs'] = gRNA_mapping_locations['match'].apply(interpret_mismatches)
@@ -210,9 +220,9 @@ def mismatch_locations(
 
         return gRNA_mapping_locations.loc[gRNA_and_loc, 'mm locs'].values[0]
 
-    _df['mm locs'] = [get_locs(x) for x in _df['t']]
+    overlaps['mm locs'] = [get_locs(x) for x in overlaps['t']]
 
-    return _df  # It was edited in place, but for clarity.
+    return overlaps  # It was edited in place, but for clarity.
 
 
 def df_of_gRNA_seq_to_targets(
@@ -295,9 +305,10 @@ if __name__ == '__main__':
     # Output file.
     intended_vs_actual_targets_fname = f'{data_folder}/intended_and_actual_targets_{sample}.xlsx'
 
-    df = pandas.read_excel(input_excel)
-    df = df.loc[[type(n)==type('') for n in df[gRNA_seq_col_name]]]
-    write_input_to_offinder(genome_fa_fname, df[gRNA_seq_col_name])
+    input_excel_df = pandas.read_excel(input_excel)
+    input_excel_df = input_excel_df.loc[
+        [type(n)==type('') for n in input_excel_df[gRNA_seq_col_name]]]
+    write_input_to_offinder(genome_fa_fname, input_excel_df[gRNA_seq_col_name])
 
     # Write the genome bed file for all mRNAs.
     if (not os.path.exists(mRNA_bed_fname)) or overwrite_genome_bed_file:
@@ -316,5 +327,5 @@ if __name__ == '__main__':
 
     # Write the final output.
     identify_target_genes(
-        df, overlaps_bed_fname, intended_vs_actual_targets_fname)
+        input_excel_df, overlaps_bed_fname, intended_vs_actual_targets_fname)
 
