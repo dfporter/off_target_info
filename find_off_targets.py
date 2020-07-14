@@ -26,7 +26,7 @@ def make_mRNA_bed_file(genome_gtf_fname: str) -> None:
     print(gencode.head())
 
     # Extract genes
-    gencode_genes = gencode[(gencode.feature == "gene")][['seqname', 'start', 'end', 'attribute']
+    gencode_genes = gencode[(gencode.feature == "CDS")][['seqname', 'start', 'end', 'attribute']
             ].copy().reset_index().drop('index', axis=1) 
 
     # Set annotation columns.
@@ -64,7 +64,11 @@ def intersect(
     cas_offinder_output_as_bed_fname: str,
     mRNA_bed_fname: str,
     overlaps_bed_fname: str) -> None:
-    """Write overlaps_bed_fname using mRNAs bed file and cas-offinder output."""
+    """Write overlaps_bed_fname using mRNAs bed file and cas-offinder output.
+    cas-offinder output includes the genomic location of the left border of
+    the 23 nt version of the gRNA (that is, N*20 + NGG). This position is the PAM
+    site if the gRNA is mapping to the reverse strand, and ~20 nt away if the gRNA
+    is mapping to the positive strand."""
 
     gRNA_mapping_locations = pandas.read_csv(cas_offinder_output_fname, sep='\t', header=None)
 
@@ -76,8 +80,16 @@ def intersect(
 
     print(f'# gRNAs: {len(set(gRNA_mapping_locations.gRNA))}')
     print(gRNA_mapping_locations.shape)
-    gRNA_mapping_locations['end'] = [pos+20 for pos in gRNA_mapping_locations['pos']]
-    gRNA_mapping_locations.loc[:,['chr', 'pos', 'end', 'gRNA']].to_csv(
+
+
+    to_cut_pos = lambda pos, strand: (pos+17 if strand == '+' else pos-6)
+
+    gRNA_mapping_locations['start'] = [
+        to_cut_pos(pos, strand)-5 for pos, strand in zip(gRNA_mapping_locations['pos'], gRNA_mapping_locations['strand'])]
+    gRNA_mapping_locations['end'] = [
+        to_cut_pos(pos, strand)+5 for pos, strand in zip(gRNA_mapping_locations['pos'], gRNA_mapping_locations['strand'])]
+
+    gRNA_mapping_locations.loc[:,['chr', 'start', 'end', 'gRNA']].to_csv(
         cas_offinder_output_as_bed_fname, header=False, index=False, sep='\t')
 
     cmd = f'bedtools intersect -a {cas_offinder_output_as_bed_fname} -b {mRNA_bed_fname} -wb -wa'
@@ -85,6 +97,23 @@ def intersect(
     print(cmd)
     os.system(cmd)
 
+def is_likely_target(mm_locs: List[List[int]]) -> bool:
+    print(type(mm_locs))
+    print(mm_locs)
+    if len(mm_locs) == 0:
+        return True
+    any_good = False
+
+    for locs in mm_locs:
+        if any([x>17 for x in locs]):
+            continue
+        if all([x<3 for x in locs]):
+            return True
+        if len([x for x in locs if x>3]) >= 3:
+            return True
+
+
+    return False
 
 def identify_target_genes(
     df: pandas.DataFrame,
@@ -122,20 +151,22 @@ def identify_target_genes(
     print("Simplification of cas-offinder output:\n", hits.head())
     # Add the actual targets to the dataframe with intended targets.
     info['Targets'] = [hits.loc[x, 'Targets'] if x in overlaps.index else set() for x in info.index]
-
  
     # Transfer mismatch locations to the info dataframe.
-    info['mm locs'] = ''
+    info.loc[:, 'mm locs'] = ''
+    info.loc[:, 'Good targets'] = [set() for _ in range(len(info.index))]
     for gRNA, targets in zip(info.index, info.Targets):
         for target in list(targets):
-            a = [mm for gene, mm in zip(overlaps.loc[gRNA, 'gene'], overlaps.loc[gRNA, 'mm locs']) if gene==target]
-            #print(gRNA, target, a)
-            a = re.sub('\[\[', '[', str(a))
-            a = re.sub('\]\]', ']', a)
-            info.loc[gRNA, 'mm locs'] += f"{target}: {a}; "
+            mm_locs = [mm for gene, mm in zip(overlaps.loc[gRNA, 'gene'], overlaps.loc[gRNA, 'mm locs']) if gene==target]
+            mm_locs = list(set(tuple(_) for _ in mm_locs))  # No duplicates.
+            info.loc[gRNA, 'Good targets'] |= set([target]) if is_likely_target(mm_locs) else set()
+            print(">>likely targ? ", is_likely_target(mm_locs), ')))')
+            mm_locs = re.sub('\[\[', '[', str(mm_locs))
+            mm_locs = re.sub('\]\]', ']', mm_locs)
+            info.loc[gRNA, 'mm locs'] += f"{target}: {mm_locs}; "
 
     info.to_excel(intended_vs_actual_targets_fname)
-    
+
     print("With actual targets:\n", info.tail())
     print(f"Wrote output to {intended_vs_actual_targets_fname}")
 
@@ -236,6 +267,7 @@ if __name__ == '__main__':
     
     args = parser.parse_args()
 
+
     # File paths.
     data_folder = args.data_folder
     sample = args.sample
@@ -267,20 +299,22 @@ if __name__ == '__main__':
     df = df.loc[[type(n)==type('') for n in df[gRNA_seq_col_name]]]
     write_input_to_offinder(genome_fa_fname, df[gRNA_seq_col_name])
 
+    # Write the genome bed file for all mRNAs.
+    if (not os.path.exists(mRNA_bed_fname)) or overwrite_genome_bed_file:
+        make_mRNA_bed_file(genome_gtf_fname)
+
     # Running cas-offinder.
     # C denotes the use of CPUs vs GPUs. This program takes >=20 minutes.
     cmd = f"{cas_offinder_path} {cas_offinder_input_fname} C {cas_offinder_output_fname}"
     print(cmd)
     run_cas_offinder and os.system(cmd)
 
-    # Write the genome bed file for all mRNAs.
-    if (not os.path.exists(mRNA_bed_fname)) or overwrite_genome_bed_file:
-        make_mRNA_bed_file(genome_gtf_fname)
-
+    # Assign mapping locations to genes.
     intersect(
         cas_offinder_output_fname, cas_offinder_output_as_bed_fname,
         mRNA_bed_fname, overlaps_bed_fname)
 
+    # Write the final output.
     identify_target_genes(
         df, overlaps_bed_fname, intended_vs_actual_targets_fname)
 
